@@ -50,12 +50,12 @@ android {
 // 3. Chaquopy 설정 (android 블록 밖에서 설정하는 것이 Kotlin DSL에서 더 안정적임)
 chaquopy {
     defaultConfig {
-        version = "3.9"         // 파이썬 버전
+        version = "3.8"         // 파이썬 버전
         
         // pip 패키지가 필요한 경우 아래 주석 해제
-        pip {
-            install("numpy")
-        }
+        // pip {
+        //    install("sqlite")
+        //}
     }
 }
 
