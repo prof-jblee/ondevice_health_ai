@@ -22,6 +22,9 @@ class MainActivity: FlutterActivity() {
             // 'database.py' 모듈 로드
             val module = py.getModule("database") 
 
+            // 관련 테이블 생성
+            module.callAttr("init_db")
+
             if (call.method == "saveStep") {
                 // 1. 데이터 저장 요청
                 val step = call.argument<String>("step")
