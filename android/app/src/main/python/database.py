@@ -55,17 +55,14 @@ def init_db():
 
     conn.close()
 
-def insert_step(step_count):
+def insert_step(timestamp_str, step_count):
     """현재 시간과 걸음 수 저장"""
     try:
         conn = get_connection()
         cursor = conn.cursor()
         
-        # 현재 시간 (YYYY-MM-DD HH:MM:SS 형식)
-        now = datetime.now().strftime("%Y-%m-%d %H:%M:%S")
-        
         # 데이터 삽입
-        cursor.execute("INSERT INTO fitbit_steps (timestamp, value) VALUES (?, ?)", (now, int(step_count)))
+        cursor.execute("INSERT INTO fitbit_steps (timestamp, value) VALUES (?, ?)", (timestamp_str, int(step_count)))
         
         conn.commit()
         conn.close()

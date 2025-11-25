@@ -27,8 +27,9 @@ class MainActivity: FlutterActivity() {
 
             if (call.method == "saveStep") {
                 // 1. 데이터 저장 요청
+                val timestamp = call.argument<String>("timestamp")
                 val step = call.argument<String>("step")
-                val pyResult = module.callAttr("insert_step", step).toString()
+                val pyResult = module.callAttr("insert_step", timestamp, step).toString()
                 result.success(pyResult)
 
             } else if (call.method == "getCount") {
