@@ -67,30 +67,41 @@ class _ZeppLocalServerAppState extends State<ZeppLocalServerApp> {
 
     // (1) PATCH /steps (배열 처리)
     router.add('PATCH', '/steps', (Request req) async {
-      final body = await req.readAsString();
+      
       try {
-        final parsed = jsonDecode(body);
-        if (parsed is! List) throw FormatException('Array expected');
-        
-        int savedCount = 0;
-        for (final item in parsed) {
-          final ts = (item['ts'] as num?)?.toInt();
-          final sc = (item['step_count'] as num?)?.toInt();
-          
-          if (ts != null && sc != null) {
-             final dt = DateTime.fromMillisecondsSinceEpoch(ts);
-             final timeString = dt.toIso8601String().replaceAll('T', ' ').split('.')[0];
-             
-             _controller.add('수신(PATCH) - step:$sc time:$timeString');
-             
-             // [핵심] 루프 돌며 DB 저장
-             await _saveStepToDb(timeString, sc);
-             savedCount++;
-          }
+
+        final params = req.url.queryParameters;
+        final valueStr = params['value'];
+        final tsStr = params['timestamp'];
+
+        if (valueStr == null || double.tryParse(valueStr) == null) {
+          return Response(
+            400,
+            body: jsonEncode({
+              'error': "유효한 숫자 값을 query parameter 'value'로 전달하세요.",
+              'example': '/number?value=42&timestamp=1730123456789',
+            }),
+            headers: {'content-type': 'application/json'},
+          );
         }
-        return Response.ok(jsonEncode({'message': '$savedCount건 저장됨'}), headers: {
-          'content-type': 'application/json',
-        });
+        
+        final ts = (tsStr as num?)?.toInt();
+        final sc = (valueStr as num?)?.toInt();
+        
+        if (ts != null && sc != null) {
+          final dt = DateTime.fromMillisecondsSinceEpoch(ts);
+          final timeString = dt.toIso8601String().replaceAll('T', ' ').split('.')[0];
+             
+          _controller.add('수신(PATCH) - step:$sc time:$timeString');
+             
+          // [핵심] 루프 돌며 DB 저장
+          await _saveStepToDb(timeString, sc);
+
+          return Response.ok(jsonEncode({'message': '$timeString에 걸음수: $sc 저장됨'}), headers: {
+            'content-type': 'application/json',
+          });
+        }
+        
       } catch (e) {
         return Response(400, body: 'Error: $e');
       }
