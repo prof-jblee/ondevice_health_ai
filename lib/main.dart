@@ -1,140 +1,167 @@
-import 'package:flutter/material.dart';
+import 'dart:async';
+import 'dart:convert';
+import 'dart:io';
+
+import 'package:flutter/material.dart' hide Router;
 import 'package:flutter/services.dart';
 
+import 'package:shelf/shelf.dart';
+import 'package:shelf/shelf_io.dart';
+import 'package:shelf_router/shelf_router.dart';
+
 void main() {
-  runApp(const MyApp());
+  runApp(const ZeppLocalServerApp());
 }
 
-class MyApp extends StatelessWidget {
-  const MyApp({super.key});
-
+class ZeppLocalServerApp extends StatefulWidget {
+  const ZeppLocalServerApp({super.key});
   @override
-  Widget build(BuildContext context) {
-    return MaterialApp(home: FitbitScreen());
-  }
+  State<ZeppLocalServerApp> createState() => _ZeppLocalServerAppState();
 }
 
-class FitbitScreen extends StatefulWidget {
-  @override
-  _FitbitScreenState createState() => _FitbitScreenState();
-}
-
-class _FitbitScreenState extends State<FitbitScreen> {
+class _ZeppLocalServerAppState extends State<ZeppLocalServerApp> {
+  HttpServer? _server;
+  final _events = <String>[];
+  final _controller = StreamController<String>.broadcast();
+  late final StreamSubscription<String> _sub;
+  
+  // [추가] Python 통신 채널
   static const platform = MethodChannel('com.example.chaquopy/python');
-  
-  final TextEditingController _controller = TextEditingController();
-  
-  String _saveStatus = "데이터를 입력해주세요."; // 저장 결과 메시지
-  String _countResult = "아직 조회되지 않음";   // 데이터 개수 메시지
 
-  // 1. 데이터 저장 함수
-  Future<void> _saveToPython() async {
-    String step = _controller.text;
-    if (step.isEmpty) return;
-
-    String response;
-    try {
-      // Kotlin의 saveStep 호출
-      final String result = await platform.invokeMethod('saveStep', {"step": step});
-      response = result;
-    } on PlatformException catch (e) {
-      response = "저장 실패: '${e.message}'.";
-    }
-
-    setState(() {
-      _saveStatus = response;
+  @override
+  void initState() {
+    super.initState();
+    // 로그 리스너
+    _sub = _controller.stream.listen((msg) {
+      if (!mounted) return;
+      setState(() => _events.insert(0, msg));
     });
+    _startServer();
   }
 
-  // 2. 데이터 개수 조회 함수
-  Future<void> _getDbCount() async {
-    String response;
+  // [추가] DB 저장 헬퍼 함수
+  Future<void> _saveStepToDb(String timestamp, int step) async {
     try {
-      // Kotlin의 getCount 호출 (리턴값이 int)
+      final String result = await platform.invokeMethod('saveStep', {
+        "timestamp": timestamp,
+        "step": step.toString(),
+      });
+      _controller.add("DB 저장 결과: $result");
+    } on PlatformException catch (e) {
+      _controller.add("DB 에러: ${e.message}");
+    }
+  }
+  
+  // [추가] DB 개수 확인 함수 (테스트용)
+  Future<void> _checkDbCount() async {
+    try {
       final int result = await platform.invokeMethod('getCount');
-      response = "총 데이터 개수: $result개";
-    } on PlatformException catch (e) {
-      response = "조회 실패: '${e.message}'.";
+      _controller.add("현재 DB 저장된 행 개수: $result개");
+    } catch (e) {
+      _controller.add("조회 실패");
     }
-
-    setState(() {
-      _countResult = response;
-    });
   }
 
-  // 3. DB 초기화 함수
-  Future<void> _resetDb() async {
-    String response;
-    try {
-      final String result = await platform.invokeMethod('resetDb');
-      response = result;
-    } on PlatformException catch (e) {
-      response = "초기화 실패: '${e.message}'.";
-    }
+  Future<void> _startServer() async {
+    final router = Router();
 
-    // 초기화 후 화면 갱신 (개수 0으로 보여주기 위해)
-    setState(() {
-      _saveStatus = response;
-      _countResult = "초기화 됨 (0개)";
+    // (1) PATCH /steps (배열 처리)
+    router.add('PATCH', '/steps', (Request req) async {
+      
+      try {
+
+        final params = req.url.queryParameters;
+        final valueStr = params['value'];
+        final tsStr = params['timestamp'];
+
+        if (valueStr == null || double.tryParse(valueStr) == null) {
+          return Response(
+            400,
+            body: jsonEncode({
+              'error': "유효한 숫자 값을 query parameter 'value'로 전달하세요.",
+              'example': '/number?value=42&timestamp=1730123456789',
+            }),
+            headers: {'content-type': 'application/json'},
+          );
+        }
+        
+        final ts = (tsStr as num?)?.toInt();
+        final sc = (valueStr as num?)?.toInt();
+        
+        if (ts != null && sc != null) {
+          final dt = DateTime.fromMillisecondsSinceEpoch(ts);
+          final timeString = dt.toIso8601String().replaceAll('T', ' ').split('.')[0];
+             
+          _controller.add('수신(PATCH) - step:$sc time:$timeString');
+             
+          // [핵심] 루프 돌며 DB 저장
+          await _saveStepToDb(timeString, sc);
+
+          return Response.ok(jsonEncode({'message': '$timeString에 걸음수: $sc 저장됨'}), headers: {
+            'content-type': 'application/json',
+          });
+        }
+        
+      } catch (e) {
+        return Response(400, body: 'Error: $e');
+      }
     });
+
+    final handler = const Pipeline().addMiddleware(logRequests()).addHandler(router);
+    final server = await serve(handler, InternetAddress.anyIPv4, 3000); // 포트 3000
+    
+    setState(() => _server = server);
+    _controller.add('서버 시작됨: http://${server.address.address}:${server.port}');
+  }
+
+  @override
+  void dispose() {
+    _sub.cancel();
+    _controller.close();
+    _server?.close(force: true);
+    super.dispose();
   }
 
   @override
   Widget build(BuildContext context) {
-    return Scaffold(
-      appBar: AppBar(title: const Text("Fitbit DB Manager")),
-      body: Padding(
-        padding: const EdgeInsets.all(20.0),
-        child: Column(
-          mainAxisAlignment: MainAxisAlignment.center,
+    final addr = _server != null
+        ? '서버 실행 중: http://${_server!.address.address}:${_server!.port}'
+        : '서버 시작 중...';
+
+    return MaterialApp(
+      home: Scaffold(
+        appBar: AppBar(
+          title: const Text('AmazHealth DB Server'),
+          actions: [
+            // DB 확인용 버튼 추가
+            IconButton(
+              icon: const Icon(Icons.storage),
+              onPressed: _checkDbCount,
+              tooltip: "DB 개수 확인",
+            )
+          ],
+        ),
+        body: Column(
+          crossAxisAlignment: CrossAxisAlignment.stretch,
           children: [
-            TextField(
-              controller: _controller,
-              keyboardType: TextInputType.number, // 숫자 키패드
-              decoration: const InputDecoration(
-                labelText: "걸음 수 (Step)",
-                border: OutlineInputBorder(),
-              ),
+            Container(
+              color: Colors.black12,
+              padding: const EdgeInsets.all(12),
+              child: SelectableText(addr, style: const TextStyle(fontWeight: FontWeight.bold)),
             ),
-            const SizedBox(height: 20),
-            
-            // 저장 버튼
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _saveToPython,
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.blue),
-                child: const Text("DB에 저장하기 (Python 실행)", style: TextStyle(color: Colors.white)),
-              ),
+            const Padding(
+              padding: EdgeInsets.all(12),
+              child: Text('실시간 로그 및 DB 저장 현황', style: TextStyle(color: Colors.blueGrey)),
             ),
-            Text(_saveStatus, style: const TextStyle(color: Colors.blueGrey)),
-
-            const Divider(height: 40, thickness: 2),
-
-            // 조회 버튼
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _getDbCount,
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.green),
-                child: const Text("저장된 행 개수 확인하기", style: TextStyle(color: Colors.white)),
-              ),
-            ),
-            const SizedBox(height: 10),
-            Text(
-              _countResult,
-              style: const TextStyle(fontSize: 20, fontWeight: FontWeight.bold),
-            ),
-
-            const SizedBox(height: 30), // 간격 추가
-
-            // 초기화 버튼 (빨간색)
-            SizedBox(
-              width: double.infinity,
-              child: ElevatedButton(
-                onPressed: _resetDb,
-                style: ElevatedButton.styleFrom(backgroundColor: Colors.redAccent),
-                child: const Text("DB 초기화 (데이터 전체 삭제)", style: TextStyle(color: Colors.white)),
+            const Divider(height: 1),
+            Expanded(
+              child: ListView.separated(
+                itemBuilder: (_, i) => ListTile(
+                  title: Text(_events[i], style: const TextStyle(fontSize: 14)),
+                  dense: true,
+                ),
+                separatorBuilder: (_, __) => const Divider(height: 1),
+                itemCount: _events.length,
               ),
             ),
           ],
