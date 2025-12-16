@@ -65,8 +65,8 @@ class _ZeppLocalServerAppState extends State<ZeppLocalServerApp> {
   Future<void> _startServer() async {
     final router = Router();
 
-    // (1) PATCH /steps (배열 처리)
-    router.add('PATCH', '/steps', (Request req) async {
+    // (1) steps
+    router.get('/steps', (Request req) async {
       
       try {
 
@@ -85,23 +85,21 @@ class _ZeppLocalServerAppState extends State<ZeppLocalServerApp> {
           );
         }
         
-        final ts = (tsStr as num?)?.toInt();
-        final sc = (valueStr as num?)?.toInt();
-        
-        if (ts != null && sc != null) {
-          final dt = DateTime.fromMillisecondsSinceEpoch(ts);
+        final sc = int.parse(valueStr);
+        DateTime? dt;
+        if (tsStr != null && int.tryParse(tsStr) != null) {
+          dt = DateTime.fromMillisecondsSinceEpoch(int.parse(tsStr));       
           final timeString = dt.toIso8601String().replaceAll('T', ' ').split('.')[0];
-             
-          _controller.add('수신(PATCH) - step:$sc time:$timeString');
+
+          // _controller.add('수신 - step:$sc time:$timeString');
              
           // [핵심] 루프 돌며 DB 저장
           await _saveStepToDb(timeString, sc);
 
-          return Response.ok(jsonEncode({'message': '$timeString에 걸음수: $sc 저장됨'}), headers: {
+           return Response.ok(jsonEncode({'message': '$timeString에 걸음수: $sc 저장됨'}), headers: {
             'content-type': 'application/json',
           });
-        }
-        
+        }        
       } catch (e) {
         return Response(400, body: 'Error: $e');
       }

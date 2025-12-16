@@ -66,7 +66,7 @@ def insert_step(timestamp_str, step_count):
         
         conn.commit()
         conn.close()
-        return f"성공: {now}에 {step_count}보 저장됨"
+        return f"성공: {timestamp_str}에 {step_count}보 저장됨"
     
     except sqlite3.IntegrityError:
         conn.close()
