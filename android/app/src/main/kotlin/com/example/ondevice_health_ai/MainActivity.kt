@@ -13,23 +13,33 @@ class MainActivity: FlutterActivity() {
         super.configureFlutterEngine(flutterEngine)
 
         MethodChannel(flutterEngine.dartExecutor.binaryMessenger, CHANNEL).setMethodCallHandler { call, result ->
-            if (call.method == "runPython") {
-                
-                // 1. Flutter에서 보낸 인자 받기
-                val name = call.argument<String>("name")
+            
+            // Python 시작 확인
+            if (!Python.isStarted()) {
+                Python.start(AndroidPlatform(this))
+            }
+            val py = Python.getInstance()
+            // 'database.py' 모듈 로드
+            val module = py.getModule("database") 
 
-                // 2. Python이 시작되지 않았으면 시작
-                if (!Python.isStarted()) {
-                    Python.start(AndroidPlatform(this))
-                }
+            // 관련 테이블 생성
+            module.callAttr("init_db")
 
-                // 3. Python 인스턴스 및 모듈 가져오기
-                val py = Python.getInstance()
-                val module = py.getModule("hello")      // hello.py 파일
+            if (call.method == "saveStep") {
+                // 1. 데이터 저장 요청
+                val timestamp = call.argument<String>("timestamp")
+                val step = call.argument<String>("step")
+                val pyResult = module.callAttr("insert_step", timestamp, step).toString()
+                result.success(pyResult)
 
-                // 4. 함수 실행 및 결과 받기
-                val pyResult = module.callAttr("greet", name).toString()
+            } else if (call.method == "getCount") {
+                // 2. 행 개수 조회 요청
+                val pyResult = module.callAttr("get_total_count").toInt()
+                result.success(pyResult)
 
+            } else if (call.method == "resetDb") {  // <--- [추가된 부분]
+                // 3. DB 초기화 요청
+                val pyResult = module.callAttr("reset_db").toString()
                 result.success(pyResult)
 
             } else {

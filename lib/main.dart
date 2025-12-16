@@ -65,52 +65,120 @@ class _ZeppLocalServerAppState extends State<ZeppLocalServerApp> {
   Future<void> _startServer() async {
     final router = Router();
 
-    // (1) steps
-    router.get('/steps', (Request req) async {
-      
+    // (A) PATCH /steps : 1번 코드의 batch 수신 로직 이식 + (가능하면) DB 저장까지
+    router.add('PATCH', '/steps', (Request req) async {
+      final body = await req.readAsString();
+
       try {
-
-        final params = req.url.queryParameters;
-        final valueStr = params['value'];
-        final tsStr = params['timestamp'];
-
-        if (valueStr == null || double.tryParse(valueStr) == null) {
-          return Response(
-            400,
-            body: jsonEncode({
-              'error': "유효한 숫자 값을 query parameter 'value'로 전달하세요.",
-              'example': '/number?value=42&timestamp=1730123456789',
-            }),
-            headers: {'content-type': 'application/json'},
-          );
+        final parsed = jsonDecode(body);
+        if (parsed is! List) {
+          throw const FormatException('Array expected');
         }
-        
-        final sc = int.parse(valueStr);
-        DateTime? dt;
-        if (tsStr != null && int.tryParse(tsStr) != null) {
-          dt = DateTime.fromMillisecondsSinceEpoch(int.parse(tsStr));       
-          final timeString = dt.toIso8601String().replaceAll('T', ' ').split('.')[0];
 
-          // _controller.add('수신 - step:$sc time:$timeString');
-             
-          // [핵심] 루프 돌며 DB 저장
-          await _saveStepToDb(timeString, sc);
+        int sensorCount = 0;
+        int sleepCount = 0;
+        int dbSavedCount = 0;
 
-           return Response.ok(jsonEncode({'message': '$timeString에 걸음수: $sc 저장됨'}), headers: {
-            'content-type': 'application/json',
-          });
-        }        
+        for (final item in parsed) {
+          if (item is! Map) {
+            _controller.add('[기타] 알 수 없는 데이터 형식 (Map 아님)');
+            continue;
+          }
+
+          final ts = (item['ts'] as num?)?.toInt() ?? 0;
+          final dtIso = (ts != 0)
+              ? DateTime.fromMillisecondsSinceEpoch(ts).toIso8601String()
+              : 'N/A';
+          final timeString = (ts != 0)
+              ? DateTime.fromMillisecondsSinceEpoch(ts)
+                  .toIso8601String()
+                  .replaceAll('T', ' ')
+                  .split('.')[0]
+              : 'N/A';
+
+          // --- A. 센서 데이터 ---
+          if (item.containsKey('step_count')) {
+            sensorCount++;
+
+            final step = (item['step_count'] as num?)?.toInt();
+            final hr = item['heart_rate'];
+            final light = item['light'];
+            final restingHr = item['resting_hr'];
+
+            _controller.add(
+              '[센서] $dtIso\n'
+              '걸음:$step\n'
+              '심박수:$hr\n'
+              '휴식기 심박수:$restingHr\n'
+              '조도:$light\n',
+            );
+
+            // ✅ 2번 코드 기능: step_count는 DB 저장 가능하면 저장
+            // (timestamp가 유효하고 step이 int이면 저장)
+            if (ts != 0 && step != null) {
+              await _saveStepToDb(timeString, step);
+              dbSavedCount++;
+            }
+          }
+          // --- B. 수면 데이터 ---
+          else if (item.containsKey('score')) {
+            sleepCount++;
+
+            final score = item['score'];
+            final startTime = item['startTime'];
+            final endTime = item['endTime'];
+            final total = item['totalTime']; // In Bed
+            final actual = item['sleepLength']; // Actual Sleep
+
+            final naps = jsonEncode(item['naps']);
+            final stages = jsonEncode(item['stages']);
+
+            _controller.add(
+              '[수면] $dtIso\n'
+              '점수:$score, 시작:$startTime, 종료:$endTime\n'
+              '실제 수면:$actual, 인 베드:$total\n'
+              '-----------------------------------\n'
+              '낮잠:\n$naps\n'
+              '-----------------------------------\n'
+              '수면 단계:\n$stages',
+            );
+
+            // ※ 수면 데이터는 현재 _saveStepToDb밖에 없어서 DB 저장은 생략
+          }
+          // --- C. 기타 ---
+          else {
+            _controller.add('[기타] $dtIso\n  알 수 없는 데이터 형식');
+          }
+        }
+
+        _controller.add(
+          '=== 전송 완료 (센서:$sensorCount개, 수면:$sleepCount개, DB저장:$dbSavedCount개) ===',
+        );
+
+        return Response.ok(
+          jsonEncode({'message': '수신 성공'}),
+          headers: {'content-type': 'application/json'},
+        );
       } catch (e) {
-        return Response(400, body: 'Error: $e');
+        return Response(
+          400,
+          body: jsonEncode({'error': 'JSON 파싱 오류: $e'}),
+          headers: {'content-type': 'application/json'},
+        );
       }
-    });
+    });    
 
-    final handler = const Pipeline().addMiddleware(logRequests()).addHandler(router);
-    final server = await serve(handler, InternetAddress.anyIPv4, 3000); // 포트 3000
-    
+    // 서버 실행
+    final handler = const Pipeline()
+        .addMiddleware(logRequests())
+        .addHandler(router);
+
+    final server = await serve(handler, InternetAddress.anyIPv4, 3000);
+
     setState(() => _server = server);
     _controller.add('서버 시작됨: http://${server.address.address}:${server.port}');
   }
+
 
   @override
   void dispose() {
